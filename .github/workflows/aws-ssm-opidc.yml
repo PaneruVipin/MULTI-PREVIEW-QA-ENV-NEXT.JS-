@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Configure AWS credentials using OIDC
+      - name: Configure AWS credentials (OIDC Secure Login)
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ secrets.AWS_DEPLOY_ROLE }}
@@ -24,22 +24,25 @@ jobs:
         run: |
           PR=${{ github.event.pull_request.number }}
 
-          # 1) Send Command
+          echo "Deploying PR #$PR..."
+
+          # 1) Send SSM Command
           CMD=$(aws ssm send-command \
             --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
             --document-name "AWS-RunShellScript" \
-            --comment "Deploy PR" \
+            --comment "Deploying PR #$PR" \
+            --timeout-seconds 120 \
             --parameters commands="sudo /opt/frontend-pr/deploy_front_pr.sh $PR" \
             --query "Command.CommandId" \
             --output text)
 
           echo "SSM Command ID: $CMD"
 
-          # 2) Wait for command completion
+          # 2) Poll command status
           STATUS="InProgress"
           while [[ "$STATUS" == "InProgress" || "$STATUS" == "Pending" ]]; do
             echo "⏳ Waiting for SSM command to complete..."
-            sleep 5
+            sleep 4
             STATUS=$(aws ssm get-command-invocation \
               --command-id "$CMD" \
               --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
@@ -49,9 +52,9 @@ jobs:
 
           echo "Final Status: $STATUS"
 
-          # 3) Show Logs
+          # 3) Print STDOUT
           echo "-------------------------"
-          echo "STDOUT:"
+          echo "STDOUT"
           echo "-------------------------"
           aws ssm get-command-invocation \
             --command-id "$CMD" \
@@ -59,8 +62,9 @@ jobs:
             --query "StandardOutputContent" \
             --output text
 
+          # 4) Print STDERR
           echo "-------------------------"
-          echo "STDERR:"
+          echo "STDERR"
           echo "-------------------------"
           aws ssm get-command-invocation \
             --command-id "$CMD" \
@@ -68,7 +72,7 @@ jobs:
             --query "StandardErrorContent" \
             --output text
 
-          # 4) Mark failure
+          # 5) Mark Job failed if SSM failed
           if [[ "$STATUS" != "Success" ]]; then
             echo "❌ Deployment failed!"
             exit 1
